@@ -20,17 +20,17 @@ void avifROStreamStart(avifROStream * stream, avifROData * raw)
     stream->offset = 0;
 }
 
-avifBool avifROStreamHasBytesLeft(avifROStream * stream, size_t byteCount)
+avifBool avifROStreamHasBytesLeft(const avifROStream * stream, size_t byteCount)
 {
-    return (stream->offset + byteCount) <= stream->raw->size;
+    return byteCount <= (stream->raw->size - stream->offset);
 }
 
-size_t avifROStreamRemainingBytes(avifROStream * stream)
+size_t avifROStreamRemainingBytes(const avifROStream * stream)
 {
     return stream->raw->size - stream->offset;
 }
 
-size_t avifROStreamOffset(avifROStream * stream)
+size_t avifROStreamOffset(const avifROStream * stream)
 {
     return stream->offset;
 }
@@ -143,7 +143,7 @@ avifBool avifROStreamReadString(avifROStream * stream, char * output, size_t out
     return AVIF_TRUE;
 }
 
-avifBool avifROStreamReadBoxHeader(avifROStream * stream, avifBoxHeader * header)
+avifBool avifROStreamReadBoxHeaderPartial(avifROStream * stream, avifBoxHeader * header)
 {
     size_t startOffset = stream->offset;
 
@@ -165,12 +165,15 @@ avifBool avifROStreamReadBoxHeader(avifROStream * stream, avifBoxHeader * header
         return AVIF_FALSE;
     }
     header->size = (size_t)(size - bytesRead);
+    return AVIF_TRUE;
+}
 
-    // Make the assumption here that this box's contents must fit in the remaining portion of the parent stream
-    if (header->size > avifROStreamRemainingBytes(stream)) {
+avifBool avifROStreamReadBoxHeader(avifROStream * stream, avifBoxHeader * header)
+{
+    if (!avifROStreamReadBoxHeaderPartial(stream, header)) {
         return AVIF_FALSE;
     }
-    return AVIF_TRUE;
+    return (header->size <= avifROStreamRemainingBytes(stream));
 }
 
 avifBool avifROStreamReadVersionAndFlags(avifROStream * stream, uint8_t * version, uint32_t * flags)
@@ -215,7 +218,7 @@ void avifRWStreamStart(avifRWStream * stream, avifRWData * raw)
     stream->offset = 0;
 }
 
-size_t avifRWStreamOffset(avifRWStream * stream)
+size_t avifRWStreamOffset(const avifRWStream * stream)
 {
     return stream->offset;
 }
@@ -239,7 +242,7 @@ void avifRWStreamFinishWrite(avifRWStream * stream)
     }
 }
 
-void avifRWStreamWrite(avifRWStream * stream, const uint8_t * data, size_t size)
+void avifRWStreamWrite(avifRWStream * stream, const void * data, size_t size)
 {
     if (!size) {
         return;
@@ -252,7 +255,7 @@ void avifRWStreamWrite(avifRWStream * stream, const uint8_t * data, size_t size)
 
 void avifRWStreamWriteChars(avifRWStream * stream, const char * chars, size_t size)
 {
-    avifRWStreamWrite(stream, (const uint8_t *)chars, size);
+    avifRWStreamWrite(stream, chars, size);
 }
 
 avifBoxMarker avifRWStreamWriteFullBox(avifRWStream * stream, const char * type, size_t contentSize, int version, uint32_t flags)
@@ -286,7 +289,7 @@ avifBoxMarker avifRWStreamWriteBox(avifRWStream * stream, const char * type, siz
 
 void avifRWStreamFinishBox(avifRWStream * stream, avifBoxMarker marker)
 {
-    uint32_t noSize = avifNTOHL((uint32_t)(stream->offset - marker));
+    uint32_t noSize = avifHTONL((uint32_t)(stream->offset - marker));
     memcpy(stream->raw->data + marker, &noSize, sizeof(uint32_t));
 }
 

@@ -23,10 +23,8 @@ static void rav1eCodecDestroyInternal(avifCodec * codec)
     avifFree(codec->internal);
 }
 
-static avifBool rav1eCodecOpen(struct avifCodec * codec, uint32_t firstSampleIndex)
+static avifBool rav1eCodecOpen(struct avifCodec * codec)
 {
-    (void)firstSampleIndex; // Codec is encode-only, this isn't used
-
     codec->internal->rav1eContext = NULL;
     return AVIF_TRUE;
 }
@@ -55,19 +53,24 @@ static avifBool rav1eSupports400(void)
     return minorVersion >= 4;
 }
 
-static avifBool rav1eCodecEncodeImage(avifCodec * codec,
-                                      avifEncoder * encoder,
-                                      const avifImage * image,
-                                      avifBool alpha,
-                                      uint32_t addImageFlags,
-                                      avifCodecEncodeOutput * output)
+static avifResult rav1eCodecEncodeImage(avifCodec * codec,
+                                        avifEncoder * encoder,
+                                        const avifImage * image,
+                                        avifBool alpha,
+                                        uint32_t addImageFlags,
+                                        avifCodecEncodeOutput * output)
 {
-    avifBool success = AVIF_FALSE;
+    avifResult result = AVIF_RESULT_UNKNOWN_ERROR;
 
     RaConfig * rav1eConfig = NULL;
     RaFrame * rav1eFrame = NULL;
 
     if (!codec->internal->rav1eContext) {
+        if (codec->csOptions->count > 0) {
+            // None are currently supported!
+            return AVIF_RESULT_INVALID_CODEC_SPECIFIC_OPTION;
+        }
+
         const avifBool supports400 = rav1eSupports400();
         RaPixelRange rav1eRange;
         if (alpha) {
@@ -94,13 +97,16 @@ static avifBool rav1eCodecEncodeImage(avifCodec * codec,
                     break;
                 case AVIF_PIXEL_FORMAT_NONE:
                 default:
-                    return AVIF_FALSE;
+                    return AVIF_RESULT_UNKNOWN_ERROR;
             }
         }
 
         rav1eConfig = rav1e_config_default();
-        if (rav1e_config_set_pixel_format(
-                rav1eConfig, (uint8_t)image->depth, codec->internal->chromaSampling, RA_CHROMA_SAMPLE_POSITION_UNKNOWN, rav1eRange) < 0) {
+        if (rav1e_config_set_pixel_format(rav1eConfig,
+                                          (uint8_t)image->depth,
+                                          codec->internal->chromaSampling,
+                                          (RaChromaSamplePosition)image->yuvChromaSamplePosition,
+                                          rav1eRange) < 0) {
             goto cleanup;
         }
 
@@ -206,7 +212,7 @@ static avifBool rav1eCodecEncodeImage(avifCodec * codec,
             break;
         }
     }
-    success = AVIF_TRUE;
+    result = AVIF_RESULT_OK;
 cleanup:
     if (rav1eFrame) {
         rav1e_frame_unref(rav1eFrame);
@@ -216,7 +222,7 @@ cleanup:
         rav1e_config_unref(rav1eConfig);
         rav1eConfig = NULL;
     }
-    return success;
+    return result;
 }
 
 static avifBool rav1eCodecEncodeFinish(avifCodec * codec, avifCodecEncodeOutput * output)

@@ -25,6 +25,8 @@
 #pragma clang diagnostic ignored "-Wassign-enum"
 #endif
 
+#include <limits.h>
+#include <stdlib.h>
 #include <string.h>
 
 struct avifCodecInternal
@@ -32,7 +34,6 @@ struct avifCodecInternal
     avifBool decoderInitialized;
     aom_codec_ctx_t decoder;
     aom_codec_iter_t iter;
-    uint32_t inputSampleIndex;
     aom_image_t * image;
 
     avifBool encoderInitialized;
@@ -53,7 +54,7 @@ static void aomCodecDestroyInternal(avifCodec * codec)
     avifFree(codec->internal);
 }
 
-static avifBool aomCodecOpen(struct avifCodec * codec, uint32_t firstSampleIndex)
+static avifBool aomCodecOpen(struct avifCodec * codec)
 {
     aom_codec_iface_t * decoder_interface = aom_codec_av1_dx();
     if (aom_codec_dec_init(&codec->internal->decoder, decoder_interface, NULL, 0)) {
@@ -61,16 +62,18 @@ static avifBool aomCodecOpen(struct avifCodec * codec, uint32_t firstSampleIndex
     }
     codec->internal->decoderInitialized = AVIF_TRUE;
 
-    if (aom_codec_control(&codec->internal->decoder, AV1D_SET_OUTPUT_ALL_LAYERS, 1)) {
+    // Ensure that we only get the "highest spatial layer" as a single frame
+    // for each input sample, instead of getting each spatial layer as its own
+    // frame one at a time ("all layers").
+    if (aom_codec_control(&codec->internal->decoder, AV1D_SET_OUTPUT_ALL_LAYERS, 0)) {
         return AVIF_FALSE;
     }
 
-    codec->internal->inputSampleIndex = firstSampleIndex;
     codec->internal->iter = NULL;
     return AVIF_TRUE;
 }
 
-static avifBool aomCodecGetNextImage(avifCodec * codec, avifImage * image)
+static avifBool aomCodecGetNextImage(struct avifCodec * codec, const avifDecodeSample * sample, avifBool alpha, avifImage * image)
 {
     aom_image_t * nextFrame = NULL;
     for (;;) {
@@ -78,16 +81,13 @@ static avifBool aomCodecGetNextImage(avifCodec * codec, avifImage * image)
         if (nextFrame) {
             // Got an image!
             break;
-        } else if (codec->internal->inputSampleIndex < codec->decodeInput->samples.count) {
-            // Feed another sample
-            avifDecodeSample * sample = &codec->decodeInput->samples.sample[codec->internal->inputSampleIndex];
-            ++codec->internal->inputSampleIndex;
+        } else if (sample) {
             codec->internal->iter = NULL;
             if (aom_codec_decode(&codec->internal->decoder, sample->data.data, sample->data.size, NULL)) {
                 return AVIF_FALSE;
             }
+            sample = NULL;
         } else {
-            // No more samples to feed
             break;
         }
     }
@@ -95,14 +95,14 @@ static avifBool aomCodecGetNextImage(avifCodec * codec, avifImage * image)
     if (nextFrame) {
         codec->internal->image = nextFrame;
     } else {
-        if (codec->decodeInput->alpha && codec->internal->image) {
+        if (alpha && codec->internal->image) {
             // Special case: reuse last alpha frame
         } else {
             return AVIF_FALSE;
         }
     }
 
-    avifBool isColor = !codec->decodeInput->alpha;
+    avifBool isColor = !alpha;
     if (isColor) {
         // Color (YUV) planes - set image to correct size / format, fill color
 
@@ -216,12 +216,140 @@ static aom_img_fmt_t avifImageCalcAOMFmt(const avifImage * image, avifBool alpha
     return fmt;
 }
 
-static avifBool aomCodecEncodeImage(avifCodec * codec,
-                                    avifEncoder * encoder,
-                                    const avifImage * image,
-                                    avifBool alpha,
-                                    uint32_t addImageFlags,
-                                    avifCodecEncodeOutput * output)
+static avifBool aomOptionParseInt(const char * str, int * val)
+{
+    char * endptr;
+    const long rawval = strtol(str, &endptr, 10);
+
+    if (str[0] != '\0' && endptr[0] == '\0' && rawval >= INT_MIN && rawval <= INT_MAX) {
+        *val = (int)rawval;
+        return AVIF_TRUE;
+    }
+
+    return AVIF_FALSE;
+}
+
+struct aomOptionEnumList
+{
+    const char * name;
+    int val;
+};
+
+static avifBool aomOptionParseEnum(const char * str, const struct aomOptionEnumList * enums, int * val)
+{
+    const struct aomOptionEnumList * listptr;
+    long int rawval;
+    char * endptr;
+
+    // First see if the value can be parsed as a raw value.
+    rawval = strtol(str, &endptr, 10);
+    if (str[0] != '\0' && endptr[0] == '\0') {
+        // Got a raw value, make sure it's valid.
+        for (listptr = enums; listptr->name; listptr++)
+            if (listptr->val == rawval) {
+                *val = (int)rawval;
+                return AVIF_TRUE;
+            }
+    }
+
+    // Next see if it can be parsed as a string.
+    for (listptr = enums; listptr->name; listptr++) {
+        if (!strcmp(str, listptr->name)) {
+            *val = listptr->val;
+            return AVIF_TRUE;
+        }
+    }
+
+    return AVIF_FALSE;
+}
+
+static const struct aomOptionEnumList endUsageEnum[] = { //
+    { "vbr", AOM_VBR },                                  // Variable Bit Rate (VBR) mode
+    { "cbr", AOM_CBR },                                  // Constant Bit Rate (CBR) mode
+    { "cq", AOM_CQ },                                    // Constrained Quality (CQ)  mode
+    { "q", AOM_Q },                                      // Constrained Quality (CQ)  mode
+    { NULL, 0 }
+};
+
+static avifBool avifProcessAOMOptionsPreInit(avifCodec * codec, struct aom_codec_enc_cfg * cfg)
+{
+    for (uint32_t i = 0; i < codec->csOptions->count; ++i) {
+        avifCodecSpecificOption * entry = &codec->csOptions->entries[i];
+        int val;
+        if (!strcmp(entry->key, "end-usage")) { // Rate control mode
+            if (!aomOptionParseEnum(entry->value, endUsageEnum, &val)) {
+                return AVIF_FALSE;
+            }
+            cfg->rc_end_usage = val;
+        }
+    }
+    return AVIF_TRUE;
+}
+
+struct aomOptionDef
+{
+    const char * name;
+    int controlId;
+    const struct aomOptionEnumList * enums;
+};
+
+static const struct aomOptionEnumList tuningEnum[] = { //
+    { "psnr", AOM_TUNE_PSNR },                         //
+    { "ssim", AOM_TUNE_SSIM },                         //
+    { NULL, 0 }
+};
+
+static const struct aomOptionDef aomOptionDefs[] = {                 //
+    { "aq-mode", AV1E_SET_AQ_MODE, NULL },                           // Adaptive quantization mode
+    { "cq-level", AOME_SET_CQ_LEVEL, NULL },                         // Constant/Constrained Quality level
+    { "enable-chroma-deltaq", AV1E_SET_ENABLE_CHROMA_DELTAQ, NULL }, // Enable delta quantization in chroma planes
+    { "sharpness", AOME_SET_SHARPNESS, NULL },                       // Loop filter sharpness
+    { "tune", AOME_SET_TUNING, tuningEnum },                         // Tune distortion metric
+    { NULL, 0, NULL }
+};
+
+static avifBool avifProcessAOMOptionsPostInit(avifCodec * codec)
+{
+    for (uint32_t i = 0; i < codec->csOptions->count; ++i) {
+        avifCodecSpecificOption * entry = &codec->csOptions->entries[i];
+        // Skip options processed by avifProcessAOMOptionsPreInit.
+        if (!strcmp(entry->key, "end-usage")) {
+            continue;
+        }
+
+        avifBool match = AVIF_FALSE;
+        for (int j = 0; aomOptionDefs[j].name; ++j) {
+            if (!strcmp(entry->key, aomOptionDefs[j].name)) {
+                match = AVIF_TRUE;
+                int val;
+                avifBool parsed;
+                if (aomOptionDefs[j].enums) {
+                    parsed = aomOptionParseEnum(entry->value, aomOptionDefs[j].enums, &val);
+                } else {
+                    parsed = aomOptionParseInt(entry->value, &val);
+                }
+                if (!parsed) {
+                    return AVIF_FALSE;
+                }
+                if (aom_codec_control(&codec->internal->encoder, aomOptionDefs[j].controlId, val) != AOM_CODEC_OK) {
+                    return AVIF_FALSE;
+                }
+                break;
+            }
+        }
+        if (!match) {
+            return AVIF_FALSE;
+        }
+    }
+    return AVIF_TRUE;
+}
+
+static avifResult aomCodecEncodeImage(avifCodec * codec,
+                                      avifEncoder * encoder,
+                                      const avifImage * image,
+                                      avifBool alpha,
+                                      uint32_t addImageFlags,
+                                      avifCodecEncodeOutput * output)
 {
     if (!codec->internal->encoderInitialized) {
         // Map encoder speed to AOM usage + CpuUsed:
@@ -248,7 +376,7 @@ static avifBool aomCodecEncodeImage(avifCodec * codec,
             }
         }
 
-        // aom_codec.h says: aom_codec_version() == (1<<16 | 2<<8 | 3)
+        // aom_codec.h says: aom_codec_version() == (major<<16 | minor<<8 | patch)
         static const int aomVersion_2_0_0 = (2 << 16);
         const int aomVersion = aom_codec_version();
         if ((aomVersion < aomVersion_2_0_0) && (image->depth > 8)) {
@@ -273,15 +401,14 @@ static avifBool aomCodecEncodeImage(avifCodec * codec,
 
         codec->internal->aomFormat = avifImageCalcAOMFmt(image, alpha);
         if (codec->internal->aomFormat == AOM_IMG_FMT_NONE) {
-            return AVIF_FALSE;
+            return AVIF_RESULT_UNKNOWN_ERROR;
         }
 
         avifGetPixelFormatInfo(image->yuvFormat, &codec->internal->formatInfo);
 
-        aom_codec_iface_t * encoder_interface = aom_codec_av1_cx();
+        aom_codec_iface_t * encoderInterface = aom_codec_av1_cx();
         struct aom_codec_enc_cfg cfg;
-        aom_codec_enc_config_default(encoder_interface, &cfg, aomUsage);
-        codec->internal->encoderInitialized = AVIF_TRUE;
+        aom_codec_enc_config_default(encoderInterface, &cfg, aomUsage);
 
         cfg.g_profile = codec->configBox.seqProfile;
         cfg.g_bit_depth = image->depth;
@@ -293,11 +420,14 @@ static avifBool aomCodecEncodeImage(avifCodec * codec,
             // libaom to set still_picture and reduced_still_picture_header to
             // 1 in AV1 sequence headers.
             cfg.g_limit = 1;
+            // Set g_lag_in_frames to 1 to reduce the number of frame buffers
+            // (from 20 to 2) in libaom's lookahead structure. This reduces
+            // memory consumption when encoding a single image.
+            cfg.g_lag_in_frames = 1;
         }
         if (encoder->maxThreads > 1) {
             cfg.g_threads = encoder->maxThreads;
         }
-        cfg.kf_mode = AOM_KF_DISABLED;
 
         int minQuantizer = AVIF_CLAMP(encoder->minQuantizer, 0, 63);
         int maxQuantizer = AVIF_CLAMP(encoder->maxQuantizer, 0, 63);
@@ -312,7 +442,7 @@ static avifBool aomCodecEncodeImage(avifCodec * codec,
         codec->internal->monochromeEnabled = AVIF_FALSE;
         if (aomVersion > aomVersion_2_0_0) {
             // There exists a bug in libaom's chroma_check() function where it will attempt to
-            // access nonexistent UV planes when encoding monochrome at slower libavif "speeds". It
+            // access nonexistent UV planes when encoding monochrome at faster libavif "speeds". It
             // was fixed shortly after the 2.0.0 libaom release, and the fix exists in both the
             // master and applejack branches. This ensures that the next version *after* 2.0.0 will
             // have the fix, and we must avoid cfg.monochrome until then.
@@ -325,11 +455,16 @@ static avifBool aomCodecEncodeImage(avifCodec * codec,
             }
         }
 
+        if (!avifProcessAOMOptionsPreInit(codec, &cfg)) {
+            return AVIF_RESULT_INVALID_CODEC_SPECIFIC_OPTION;
+        }
+
         aom_codec_flags_t encoderFlags = 0;
         if (image->depth > 8) {
             encoderFlags |= AOM_CODEC_USE_HIGHBITDEPTH;
         }
-        aom_codec_enc_init(&codec->internal->encoder, encoder_interface, &cfg, encoderFlags);
+        aom_codec_enc_init(&codec->internal->encoder, encoderInterface, &cfg, encoderFlags);
+        codec->internal->encoderInitialized = AVIF_TRUE;
 
         if (lossless) {
             aom_codec_control(&codec->internal->encoder, AV1E_SET_LOSSLESS, 1);
@@ -347,6 +482,9 @@ static avifBool aomCodecEncodeImage(avifCodec * codec,
         }
         if (aomCpuUsed != -1) {
             aom_codec_control(&codec->internal->encoder, AOME_SET_CPUUSED, aomCpuUsed);
+        }
+        if (!avifProcessAOMOptionsPostInit(codec)) {
+            return AVIF_RESULT_INVALID_CODEC_SPECIFIC_OPTION;
         }
     }
 
@@ -387,9 +525,11 @@ static avifBool aomCodecEncodeImage(avifCodec * codec,
         aomImage->cp = (aom_color_primaries_t)image->colorPrimaries;
         aomImage->tc = (aom_transfer_characteristics_t)image->transferCharacteristics;
         aomImage->mc = (aom_matrix_coefficients_t)image->matrixCoefficients;
+        aomImage->csp = (aom_chroma_sample_position_t)image->yuvChromaSamplePosition;
         aom_codec_control(&codec->internal->encoder, AV1E_SET_COLOR_PRIMARIES, aomImage->cp);
         aom_codec_control(&codec->internal->encoder, AV1E_SET_TRANSFER_CHARACTERISTICS, aomImage->tc);
         aom_codec_control(&codec->internal->encoder, AV1E_SET_MATRIX_COEFFICIENTS, aomImage->mc);
+        aom_codec_control(&codec->internal->encoder, AV1E_SET_CHROMA_SAMPLE_POSITION, aomImage->csp);
     }
 
     if (monochromeRequested && !codec->internal->monochromeEnabled) {
@@ -402,7 +542,7 @@ static avifBool aomCodecEncodeImage(avifCodec * codec,
 
         for (int yuvPlane = 1; yuvPlane < 3; ++yuvPlane) {
             if (image->depth > 8) {
-                const uint16_t half = (image->depth == 10) ? 512 : 2048;
+                const uint16_t half = 1 << (image->depth - 1);
                 for (uint32_t j = 0; j < monoUVHeight; ++j) {
                     uint16_t * dstRow = (uint16_t *)&aomImage->planes[yuvPlane][j * aomImage->stride[yuvPlane]];
                     for (uint32_t i = 0; i < monoUVWidth; ++i) {
@@ -411,10 +551,8 @@ static avifBool aomCodecEncodeImage(avifCodec * codec,
                 }
             } else {
                 const uint8_t half = 128;
-                for (uint32_t j = 0; j < monoUVHeight; ++j) {
-                    uint8_t * dstRow = &aomImage->planes[yuvPlane][j * aomImage->stride[yuvPlane]];
-                    memset(dstRow, half, aomImage->stride[yuvPlane]);
-                }
+                size_t planeSize = (size_t)monoUVHeight * aomImage->stride[yuvPlane];
+                memset(aomImage->planes[yuvPlane], half, planeSize);
             }
         }
     }
@@ -437,7 +575,7 @@ static avifBool aomCodecEncodeImage(avifCodec * codec,
     }
 
     aom_img_free(aomImage);
-    return AVIF_TRUE;
+    return AVIF_RESULT_OK;
 }
 
 static avifBool aomCodecEncodeFinish(avifCodec * codec, avifCodecEncodeOutput * output)
