@@ -589,6 +589,8 @@ void avifDecoderDestroy(avifDecoder * decoder);
 
 // Simple interface to decode a single image, independent of the decoder afterwards (decoder may be deestroyed).
 avifResult avifDecoderRead(avifDecoder * decoder, avifImage * image, const avifROData * input);
+void SetPrintDepth(int depth);
+void SetPrintEndChar(char end_char);
 
 // Multi-function alternative to avifDecoderRead() for image sequences and gaining direct access
 // to the decoder's YUV buffers (for performance's sake). Data passed into avifDecoderParse() is NOT

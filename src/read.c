@@ -12,7 +12,17 @@ const int kIncreaseIndent = 2;
 const int kDecreaseIndent = -2;
 
 int g_indent = 0;
+int g_depth = 256;
 char* g_indent_str = NULL;
+char g_end_char[2] = {"\n"};
+
+void SetPrintDepth(int depth) {
+  g_depth = depth;
+}
+
+void SetPrintEndChar(char end_char) {
+  g_end_char[0] = end_char;
+}
 
 void UpdateString() {
   int i;
@@ -38,7 +48,9 @@ void DecrementString() {
 }
 
 void PrintString(const char *str) {
-  printf("%s%s\n", g_indent_str, str);
+  if (g_indent < g_depth) {
+    printf("%s%s%s", g_indent_str, str, g_end_char);
+  }
 }
 
 void PrintBrand(const char *name, const uint8_t *brand) {
@@ -71,8 +83,10 @@ void PrintHeader(const avifBoxHeader *header) {
   if (g_indent_str == NULL) {
     UpdateString();
   }
-  const size_t total_size = header->size + 8;
-  printf("%s%s\t%zu\n", g_indent_str, header_type, total_size);
+  if (g_indent < g_depth) {
+    const size_t total_size = header->size + 8;
+    printf("%s%s\t%zu%s", g_indent_str, header_type, total_size, g_end_char);
+  }
   IncrementString();
 }
 
@@ -2082,6 +2096,8 @@ static avifBool avifParse(avifDecoderData * data, const uint8_t * raw, size_t ra
 
         CHECK(avifROStreamSkip(&s, header.size));
     }
+    printf("\n");
+
     return AVIF_TRUE;
 }
 

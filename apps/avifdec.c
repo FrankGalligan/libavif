@@ -33,6 +33,8 @@ static void syntax(void)
     printf("    -q,--quality Q    : Output quality [0-100]. (JPEG only, default: %d)\n", DEFAULT_JPEG_QUALITY);
     printf("    -u,--upsampling U : Chroma upsampling (for 420/422). bilinear (default) or nearest\n");
     printf("    -i,--info         : Decode all frames and display all image information instead of saving to disk\n");
+    printf("    --print_depth     : Change print box info depth\n");
+    printf("    --end_char_tab    : Change print box info end char to \\t\n");
     printf("\n");
     avifPrintVersions();
 }
@@ -166,6 +168,15 @@ int main(int argc, char * argv[])
             }
         } else if (!strcmp(arg, "-i") || !strcmp(arg, "--info")) {
             infoOnly = AVIF_TRUE;
+        } else if (!strcmp(arg, "--print_depth")) {
+            NEXTARG();
+            int print_depth = atoi(arg);
+            if (print_depth < 1) {
+                print_depth = 1;
+            }
+            SetPrintDepth(print_depth);
+        } else if (!strcmp(arg, "--end_char_tab")) {
+            SetPrintEndChar('\t');
         } else {
             // Positional argument
             if (!inputFilename) {
