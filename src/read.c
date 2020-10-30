@@ -71,7 +71,8 @@ void PrintHeader(const avifBoxHeader *header) {
   if (g_indent_str == NULL) {
     UpdateString();
   }
-  printf("%s%s\n", g_indent_str, header_type);
+  const size_t total_size = header->size + 8;
+  printf("%s%s\t%zu\n", g_indent_str, header_type, total_size);
   IncrementString();
 }
 
