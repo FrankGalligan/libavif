@@ -843,6 +843,10 @@ enum avifAddImageFlags
 avifResult avifEncoderAddImage(avifEncoder * encoder, const avifImage * image, uint64_t durationInTimescales, uint32_t addImageFlags);
 avifResult avifEncoderFinish(avifEncoder * encoder, avifRWData * output);
 
+avifResult avifEncoderAddImageToLocation(avifEncoder * encoder, const avifImage * image, uint64_t durationInTimescales, uint32_t addImageFlags);
+avifResult avifEncoderEncodeImageItems(avifEncoder * encoder, const avifImage * image, uint64_t durationInTimescales, uint32_t addImageFlags);
+avifResult avifEncoderAddImageGrid(avifEncoder * encoder, int32_t rows, int32_t cols);
+
 // Codec-specific, optional "advanced" tuning settings, in the form of string key/value pairs. These
 // should be set as early as possible, preferably just after creating avifEncoder but before
 // performing any other actions.
