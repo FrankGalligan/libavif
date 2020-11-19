@@ -95,6 +95,9 @@ static void syntax(void)
     printf("    --clap WN,WD,HN,HD,HON,HOD,VON,VOD: Add clap property (clean aperture). Width, Height, HOffset, VOffset (in num/denom pairs)\n");
     printf("    --irot ANGLE                      : Add irot property (rotation). [0-3], makes (90 * ANGLE) degree rotation anti-clockwise\n");
     printf("    --imir AXIS                       : Add imir property (mirroring). 0=vertical, 1=horizontal\n");
+    printf("    -ai,--additional-image FILENAME   : Add more image files for grid encoding\n");
+    printf("    -gr,--gridrows r                  : Set number of rows for grid encoding (default: 0)\n");
+    printf("    -gc,--gridcols c                  : Set number of cols for grid encoding (default: 0)\n");
     printf("\n");
     if (avifCodecName(AVIF_CODEC_CHOICE_AOM, 0)) {
         printf("aom-specific advanced options:\n");
