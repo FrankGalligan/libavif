@@ -831,6 +831,8 @@ enum avifAddImageFlags
     AVIF_ADD_IMAGE_FLAG_SINGLE = (1 << 1)
 };
 
+#define TRY_EXTRA_INPUT 1
+
 // Multi-function alternative to avifEncoderWrite() for image sequences.
 //
 // Usage / function call order is:
@@ -843,8 +845,10 @@ enum avifAddImageFlags
 avifResult avifEncoderAddImage(avifEncoder * encoder, const avifImage * image, uint64_t durationInTimescales, uint32_t addImageFlags);
 avifResult avifEncoderFinish(avifEncoder * encoder, avifRWData * output);
 
-avifResult avifEncoderAddImageToLocation(avifEncoder * encoder, const avifImage * image, uint64_t durationInTimescales, uint32_t addImageFlags);
-avifResult avifEncoderEncodeImageItems(avifEncoder * encoder, const avifImage * image, uint64_t durationInTimescales, uint32_t addImageFlags);
+// TODO(fgalligan): Refactor avifEncoderAddImage as it is essentially
+// avifEncoderAddImageToItem and avifEncoderEncodeImageItems.
+avifResult avifEncoderAddImageToItem(avifEncoder * encoder, const avifImage * image, uint64_t durationInTimescales, uint32_t addImageFlags);
+avifResult avifEncoderEncodeImageItems(avifEncoder * encoder, uint64_t durationInTimescales, uint32_t addImageFlags);
 avifResult avifEncoderAddImageGrid(avifEncoder * encoder, int32_t rows, int32_t cols);
 
 // Codec-specific, optional "advanced" tuning settings, in the form of string key/value pairs. These

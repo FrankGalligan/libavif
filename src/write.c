@@ -140,8 +140,6 @@ typedef struct avifEncoderData
     uint16_t lastItemID;
     uint16_t primaryItemID;
 
-    uint32_t colorItemCount;
-    uint32_t colorItemIndicies[32];
     uint32_t gridCols;
     uint32_t gridRows;
 } avifEncoderData;
@@ -397,7 +395,7 @@ static void avifEncoderWriteTrackMetaBox(avifEncoder * encoder, avifRWStream * s
     avifRWStreamFinishBox(s, meta);
 }
 
-avifResult avifEncoderAddImageToLocation(avifEncoder * encoder, const avifImage * image, uint64_t durationInTimescales, uint32_t addImageFlags)
+avifResult avifEncoderAddImageToItem(avifEncoder * encoder, const avifImage * image, uint64_t durationInTimescales, uint32_t addImageFlags)
 {
     // -----------------------------------------------------------------------
     // Verify encoding is possible
@@ -427,9 +425,7 @@ avifResult avifEncoderAddImageToLocation(avifEncoder * encoder, const avifImage 
         durationInTimescales = 1;
     }
 
-    if (encoder->data->items.count == 0) {
-        encoder->data->colorItemCount = 0;
-
+    if (addImageFlags & AVIF_ADD_IMAGE_FLAG_SINGLE) {
         // Make a copy of the first image's metadata (sans pixels) for future writing/validation
         avifImageCopy(encoder->data->imageMetadata, image, 0);
 
@@ -444,8 +440,7 @@ avifResult avifEncoderAddImageToLocation(avifEncoder * encoder, const avifImage 
         encoder->data->colorItem->codec->csOptions = encoder->csOptions;
         encoder->data->primaryItemID = encoder->data->colorItem->id;
 
-        encoder->data->colorItemIndicies[encoder->data->colorItemCount++] = encoder->data->items.count;
-
+        // Add a reference to the image to the item.
         encoder->data->colorItem->avifImage = image;
 
         avifBool needsAlpha = (image->alphaPlane != NULL);
@@ -520,13 +515,6 @@ avifResult avifEncoderAddImageToLocation(avifEncoder * encoder, const avifImage 
             avifRWDataSet(&xmpItem->metadataPayload, image->xmp.data, image->xmp.size);
         }
     } else {
-        avifEncoderItem * item = avifEncoderDataCreateItem(encoder->data, "av01", "Color", 6);
-        item->codec = avifCodecCreate(encoder->codecChoice, AVIF_CODEC_FLAG_CAN_ENCODE);
-        item->codec->csOptions = encoder->csOptions;
-        encoder->data->colorItemIndicies[encoder->data->colorItemCount++] = encoder->data->items.count;
-
-        item->avifImage = image;
-
         // Another frame in an image sequence
 
         if (encoder->data->alphaItem && !image->alphaPlane) {
@@ -538,9 +526,8 @@ avifResult avifEncoderAddImageToLocation(avifEncoder * encoder, const avifImage 
     return AVIF_RESULT_OK;
 }
 
-avifResult avifEncoderEncodeImageItems(avifEncoder * encoder, const avifImage * image, uint64_t durationInTimescales, uint32_t addImageFlags)
+avifResult avifEncoderEncodeImageItems(avifEncoder * encoder, uint64_t durationInTimescales, uint32_t addImageFlags)
 {
-    (void)image;
     // -----------------------------------------------------------------------
     // Encode AV1 OBUs
 
@@ -583,13 +570,10 @@ avifResult avifEncoderAddImageGrid(avifEncoder * encoder, int32_t rows, int32_t 
         return AVIF_RESULT_INVALID_IMAGE_GRID;
     }
 
-    //const avifImage * imageMetadata = encoder->data->imageMetadata;
-    //encoder->data->gridWidth = imageMetadata->width * cols;
-    //encoder->data->gridHeight = imageMetadata->height * rows;
     encoder->data->gridCols = cols;
     encoder->data->gridRows = rows;
 
-    avifEncoderItem *gridItem =  avifEncoderDataCreateItem(encoder->data, "grid", "Grid?", 6);
+    avifEncoderItem *gridItem =  avifEncoderDataCreateItem(encoder->data, "grid", "Grid", 5);
     if (!gridItem) {
         return AVIF_RESULT_INVALID_IMAGE_GRID;
     }

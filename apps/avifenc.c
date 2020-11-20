@@ -95,7 +95,6 @@ static void syntax(void)
     printf("    --clap WN,WD,HN,HD,HON,HOD,VON,VOD: Add clap property (clean aperture). Width, Height, HOffset, VOffset (in num/denom pairs)\n");
     printf("    --irot ANGLE                      : Add irot property (rotation). [0-3], makes (90 * ANGLE) degree rotation anti-clockwise\n");
     printf("    --imir AXIS                       : Add imir property (mirroring). 0=vertical, 1=horizontal\n");
-    printf("    -ai,--additional-image FILENAME   : Add more image files for grid encoding\n");
     printf("    -gr,--gridrows r                  : Set number of rows for grid encoding (default: 0)\n");
     printf("    -gc,--gridcols c                  : Set number of cols for grid encoding (default: 0)\n");
     printf("\n");
@@ -109,6 +108,8 @@ static void syntax(void)
         printf("    tune=METRIC                       : Tune the encoder for distortion metric (psnr or ssim, default: psnr)\n");
         printf("\n");
     }
+    printf("Example: 2x2 Grid encoding (four input images)\n");
+    printf("  avifenc in1.png in2.png in3.png in4.png -gr 2 -gc 2 -o .out.avif\n");
     avifPrintVersions();
 }
 
@@ -238,28 +239,6 @@ static avifAppFileFormat avifInputReadImage(avifInput * input, avifImage * image
     return nextInputFormat;
 }
 
-static avifAppFileFormat avifInputReadImage2(const char * filename, avifPixelFormat requestedFormat, int requestedDepth, avifImage * image, uint32_t * outDepth)
-{
-    avifAppFileFormat nextInputFormat = avifGuessFileFormat(filename);
-
-    if (nextInputFormat == AVIF_APP_FILE_FORMAT_JPEG) {
-        if (!avifJPEGRead(image, filename, requestedFormat, requestedDepth)) {
-            return AVIF_APP_FILE_FORMAT_UNKNOWN;
-        }
-        if (outDepth) {
-            *outDepth = 8;
-        }
-    } else if (nextInputFormat == AVIF_APP_FILE_FORMAT_PNG) {
-        if (!avifPNGRead(image, filename, requestedFormat, requestedDepth, outDepth)) {
-            return AVIF_APP_FILE_FORMAT_UNKNOWN;
-        }
-    } else {
-        fprintf(stderr, "Unrecognized file format: %s\n", filename);
-        return AVIF_APP_FILE_FORMAT_UNKNOWN;
-    }
-    return nextInputFormat;
-}
-
 static avifBool readEntireFile(const char * filename, avifRWData * raw)
 {
     FILE * f = fopen(filename, "rb");
@@ -334,8 +313,6 @@ int main(int argc, char * argv[])
     int keyframeInterval = 0;
     avifBool cicpExplicitlySet = AVIF_FALSE;
 
-    const char * additionalImages[MAX_ADDITIONAL_IMAGES];
-    uint32_t additionalImagesCount = 0;
     int gridRows = 0;
     int gridCols = 0;
 
@@ -368,12 +345,7 @@ int main(int argc, char * argv[])
         } else if (!strcmp(arg, "-o") || !strcmp(arg, "--output")) {
             NEXTARG();
             outputFilename = arg;
-        } 
-        else if (!strcmp(arg, "-ai") || !strcmp(arg, "--additional-image")) {
-            NEXTARG();
-            additionalImages[additionalImagesCount++] = arg;
-        }
-        else if (!strcmp(arg, "-gr") || !strcmp(arg, "--gridrows")) {
+        } else if (!strcmp(arg, "-gr") || !strcmp(arg, "--gridrows")) {
             NEXTARG();
             gridRows = atoi(arg);
         } else if (!strcmp(arg, "-gc") || !strcmp(arg, "--gridcols")) {
@@ -828,21 +800,25 @@ int main(int argc, char * argv[])
         printf(" * Encoding frame 1 [%u/%d ts]: %s\n", firstDurationInTimescales, timescale, firstFile->filename);
     }
     
-    //if (additionalImagesCount > 0 && gridRows > 0 && gridCols > 0) {
     if (gridRows > 0 && gridCols > 0) {
         avifImage additionalAvifImages[16];
 
-        avifResult addImageResult = avifEncoderAddImageToLocation(encoder, image, firstDurationInTimescales, addImageFlags);
+        // Grid encoding is currently only for single images.
+        addImageFlags |= AVIF_ADD_IMAGE_FLAG_SINGLE;
+
+        avifResult addImageResult = avifEncoderAddImageToItem(encoder, image, firstDurationInTimescales, addImageFlags);
         if (addImageResult != AVIF_RESULT_OK) {
             fprintf(stderr, "ERROR: Failed to add image: %s\n", avifResultToString(addImageResult));
             goto cleanup;
         }
 
-        /*
         avifInputFile * nextFile;
         int nextImageIndex = -1;
         while ((nextFile = avifInputGetNextFile(&input)) != NULL) {
             ++nextImageIndex;
+
+            memset(&additionalAvifImages[nextImageIndex], 0, sizeof(avifImage));
+            avifImageCopy(&additionalAvifImages[nextImageIndex], image, 3);
 
             uint32_t sourceDepth = 0;
             avifAppFileFormat inputFormat = avifInputReadImage(&input, &additionalAvifImages[nextImageIndex], &sourceDepth);
@@ -852,29 +828,14 @@ int main(int argc, char * argv[])
                 goto cleanup;
             }
 
-            addImageResult = avifEncoderAddImageToLocation(encoder, &additionalAvifImages[nextImageIndex], firstDurationInTimescales, addImageFlags);
+            addImageResult = avifEncoderAddImageToItem(encoder, &additionalAvifImages[nextImageIndex], firstDurationInTimescales, addImageFlags);
             if (addImageResult != AVIF_RESULT_OK) {
                 fprintf(stderr, "ERROR: Failed to add image: %s\n", avifResultToString(addImageResult));
                 goto cleanup;
             }
         };
-        */
 
-        for (uint32_t aiIndex = 0; aiIndex < additionalImagesCount; ++aiIndex) {
-            memset(&additionalAvifImages[aiIndex], 0, sizeof(avifImage));
-            avifImageCopy(&additionalAvifImages[aiIndex], image, 3);
-
-            uint32_t sourceDepth = 0;
-            avifInputReadImage2(additionalImages[aiIndex], input.requestedFormat, input.requestedDepth, &additionalAvifImages[aiIndex], &sourceDepth);
-
-            addImageResult = avifEncoderAddImageToLocation(encoder, &additionalAvifImages[aiIndex], firstDurationInTimescales, addImageFlags);
-            if (addImageResult != AVIF_RESULT_OK) {
-                fprintf(stderr, "ERROR: Failed to add image: %s\n", avifResultToString(addImageResult));
-                goto cleanup;
-            }
-        }
-
-        addImageResult = avifEncoderEncodeImageItems(encoder, image, firstDurationInTimescales, addImageFlags);
+        addImageResult = avifEncoderEncodeImageItems(encoder, firstDurationInTimescales, addImageFlags);
         if (addImageResult != AVIF_RESULT_OK) {
             fprintf(stderr, "ERROR: Failed to encode images: %s\n", avifResultToString(addImageResult));
             goto cleanup;
@@ -893,7 +854,6 @@ int main(int argc, char * argv[])
         }
     }
     
-
     avifInputFile * nextFile;
     int nextImageIndex = -1;
     while ((nextFile = avifInputGetNextFile(&input)) != NULL) {
