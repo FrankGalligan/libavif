@@ -101,7 +101,8 @@ typedef enum avifResult
     AVIF_RESULT_TRUNCATED_DATA,
     AVIF_RESULT_IO_NOT_SET, // the avifIO field of avifDecoder is not set
     AVIF_RESULT_IO_ERROR,
-    AVIF_RESULT_WAITING_ON_IO // similar to EAGAIN/EWOULDBLOCK, this means the avifIO doesn't have necessary data available yet
+    AVIF_RESULT_WAITING_ON_IO, // similar to EAGAIN/EWOULDBLOCK, this means the avifIO doesn't have necessary data available yet
+    AVIF_RESULT_INVALID_IMAGE_OVERLAY
 } avifResult;
 
 const char * avifResultToString(avifResult result);
@@ -850,6 +851,8 @@ avifResult avifEncoderFinish(avifEncoder * encoder, avifRWData * output);
 avifResult avifEncoderAddImageToItem(avifEncoder * encoder, const avifImage * image, uint64_t durationInTimescales, uint32_t addImageFlags);
 avifResult avifEncoderEncodeImageItems(avifEncoder * encoder, uint64_t durationInTimescales, uint32_t addImageFlags);
 avifResult avifEncoderAddImageGrid(avifEncoder * encoder, int32_t rows, int32_t cols);
+avifResult avifEncoderAddImageOverlay(avifEncoder * encoder, int32_t overlayWidth, int32_t overlayHeight, uint32_t * overlayColorValues,
+    int32_t * overlayOffsetHorizontalArray, int32_t * overlayOffsetVerticalArray, int overlayOffsetHorizontalCount, int overlayOffsetVerticalCount);
 
 // Codec-specific, optional "advanced" tuning settings, in the form of string key/value pairs. These
 // should be set as early as possible, preferably just after creating avifEncoder but before
