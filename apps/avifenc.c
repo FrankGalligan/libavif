@@ -316,6 +316,8 @@ int main(int argc, char * argv[])
     int gridRows = 0;
     int gridCols = 0;
 
+    avifImage * additionalAvifImagesArray = NULL;
+
     // By default, the color profile itself is unspecified, so CP/TC are set (to 2) accordingly.
     // However, if the end-user doesn't specify any CICP, we will convert to YUV using BT601
     // coefficients anyway (as MC:2 falls back to MC:5/6), so we might as well signal it explicitly.
@@ -801,7 +803,11 @@ int main(int argc, char * argv[])
     }
     
     if (gridRows > 0 && gridCols > 0) {
-        avifImage additionalAvifImages[16];
+        if (input.useStdin) {
+            fprintf(stderr, "ERROR: Derived images do not support stdin.\n");
+            goto cleanup;
+        }
+        additionalAvifImagesArray = avifAlloc(sizeof(avifImage) * input.filesCount);
 
         // Grid encoding is currently only for single images.
         addImageFlags |= AVIF_ADD_IMAGE_FLAG_SINGLE;
@@ -817,18 +823,18 @@ int main(int argc, char * argv[])
         while ((nextFile = avifInputGetNextFile(&input)) != NULL) {
             ++nextImageIndex;
 
-            memset(&additionalAvifImages[nextImageIndex], 0, sizeof(avifImage));
-            avifImageCopy(&additionalAvifImages[nextImageIndex], image, 3);
+            memset(&additionalAvifImagesArray[nextImageIndex], 0, sizeof(avifImage));
+            avifImageCopy(&additionalAvifImagesArray[nextImageIndex], image, AVIF_PLANES_ALL);
 
             uint32_t sourceDepth = 0;
-            avifAppFileFormat inputFormat = avifInputReadImage(&input, &additionalAvifImages[nextImageIndex], &sourceDepth);
+            avifAppFileFormat inputFormat = avifInputReadImage(&input, &additionalAvifImagesArray[nextImageIndex], &sourceDepth);
             if (inputFormat == AVIF_APP_FILE_FORMAT_UNKNOWN) {
                 fprintf(stderr, "Cannot determine input file format: %s\n", firstFile->filename);
                 returnCode = 1;
                 goto cleanup;
             }
 
-            addImageResult = avifEncoderAddImageToItem(encoder, &additionalAvifImages[nextImageIndex], firstDurationInTimescales, addImageFlags);
+            addImageResult = avifEncoderAddImageToItem(encoder, &additionalAvifImagesArray[nextImageIndex], firstDurationInTimescales, addImageFlags);
             if (addImageResult != AVIF_RESULT_OK) {
                 fprintf(stderr, "ERROR: Failed to add image: %s\n", avifResultToString(addImageResult));
                 goto cleanup;
@@ -946,6 +952,18 @@ int main(int argc, char * argv[])
 cleanup:
     if (encoder) {
         avifEncoderDestroy(encoder);
+    }
+    if (additionalAvifImagesArray) {
+        // input.filesCount - 1 becuase nextImageInput skips the first image.
+        for (int i = 0; i < input.filesCount - 1; ++i) {
+            avifImage * tempImage = &additionalAvifImagesArray[i];
+            //avifImageDestroy(tempImage);
+            avifImageFreePlanes(tempImage, AVIF_PLANES_ALL);
+            avifRWDataFree(&tempImage->icc);
+            avifRWDataFree(&tempImage->exif);
+            avifRWDataFree(&tempImage->xmp);
+        }
+        avifFree(additionalAvifImagesArray);
     }
     if (image) {
         avifImageDestroy(image);
