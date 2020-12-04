@@ -903,9 +903,7 @@ avifResult avifEncoderFinish(avifEncoder * encoder, avifRWData * output)
         avifRWStreamWriteU16(&s, 1);                     // unsigned int(16) extent_count;
         avifEncoderItemAddMdatFixup(item, &s);           //
         avifRWStreamWriteU32(&s, 0 /* set later */);     // unsigned int(offset_size*8) extent_offset;
-        if (!itemIsGrid) {
-          avifRWStreamWriteU32(&s, (uint32_t)contentSize); // unsigned int(length_size*8) extent_length;
-        } else {
+        if (itemIsGrid) {
             uint32_t gridWidth = imageMetadata->width * encoder->data->gridCols;
             uint32_t gridHeight = imageMetadata->height * encoder->data->gridRows;
             uint32_t fieldLength = 16;
@@ -914,27 +912,9 @@ avifResult avifEncoderFinish(avifEncoder * encoder, avifRWData * output)
             }
             contentSize = 4 + 2 * (fieldLength / 8);
             avifRWStreamWriteU32(&s, (uint32_t)contentSize); // unsigned int(length_size*8) extent_length;
-
-            /*
-            avifRWStreamWriteU8(&s, 0);                     // unsigned int(8) version = 0;
-            if (fieldLength == 16) {
-                avifRWStreamWriteU8(&s, 0);                     // unsigned int(8) flags;
-            } else {
-                avifRWStreamWriteU8(&s, 1);                     // unsigned int(8) flags;
-            }
-            uint8_t rows_minus_one = encoder->data->gridRows - 1;
-            uint8_t cols_minus_one = encoder->data->gridCols - 1;
-            avifRWStreamWriteU8(&s, rows_minus_one);        // unsigned int(8) rows_minus_one;
-            avifRWStreamWriteU8(&s, cols_minus_one);        // unsigned int(8) cols_minus_one;
-            if (fieldLength == 16) {
-                avifRWStreamWriteU16(&s, gridWidth);        // unsigned int(FieldLength) output_width;
-                avifRWStreamWriteU16(&s, gridHeight);       // unsigned int(FieldLength) output_height;
-            } else {
-                avifRWStreamWriteU32(&s, gridWidth);        // unsigned int(FieldLength) output_width;
-                avifRWStreamWriteU32(&s, gridHeight);       // unsigned int(FieldLength) output_height;
-            }
-            */
         }
+
+        avifRWStreamWriteU32(&s, (uint32_t)contentSize); // unsigned int(length_size*8) extent_length;
     }
 
     avifRWStreamFinishBox(&s, iloc);
