@@ -142,6 +142,12 @@ typedef struct avifEncoderData
 
     uint32_t gridCols;
     uint32_t gridRows;
+    uint32_t overlayWidth;
+    uint32_t overlayHeight;
+    uint32_t overlayColorValues[4];
+    int32_t * overlayOffsetHorizontalArray;
+    int32_t * overlayOffsetVerticalArray;
+    int overlayOffsetCount;
 } avifEncoderData;
 
 static avifEncoderData * avifEncoderDataCreate()
@@ -594,6 +600,52 @@ avifResult avifEncoderAddImageGrid(avifEncoder * encoder, int32_t rows, int32_t 
     return AVIF_RESULT_OK;
 }
 
+avifResult avifEncoderAddImageOverlay(avifEncoder * encoder, int32_t overlayWidth, int32_t overlayHeight, uint32_t * overlayColorValues,
+    int32_t * overlayOffsetHorizontalArray, int32_t * overlayOffsetVerticalArray, int overlayOffsetHorizontalCount, int overlayOffsetVerticalCount) {
+    // Check if the number of images match the offset counts.
+
+    // Count images.
+    int32_t numImages = 0;
+    for (uint32_t itemIndex = 0; itemIndex < encoder->data->items.count; ++itemIndex) {
+        avifEncoderItem * item = &encoder->data->items.item[itemIndex];
+        if (item->codec && !item->alpha && item->encodeOutput) {
+            numImages++;
+        }
+    }
+    if (numImages != overlayOffsetHorizontalCount || numImages != overlayOffsetVerticalCount) {
+        return AVIF_RESULT_INVALID_IMAGE_OVERLAY;
+    }
+
+    for (int overlayColorIndex = 0; overlayColorIndex < 4; ++overlayColorIndex) {
+        encoder->data->overlayColorValues[overlayColorIndex] = overlayColorValues[overlayColorIndex];
+    }
+
+    encoder->data->overlayWidth = overlayWidth;
+    encoder->data->overlayHeight = overlayHeight;
+    encoder->data->overlayOffsetHorizontalArray = overlayOffsetHorizontalArray;
+    encoder->data->overlayOffsetVerticalArray = overlayOffsetVerticalArray;
+    encoder->data->overlayOffsetCount = overlayOffsetHorizontalCount;
+
+    avifEncoderItem *gridItem =  avifEncoderDataCreateItem(encoder->data, "iovl", "Overlay", 8);
+    if (!gridItem) {
+        return AVIF_RESULT_INVALID_IMAGE_OVERLAY;
+    }
+
+    // Update the irefs.
+    for (uint32_t itemIndex = 0; itemIndex < encoder->data->items.count; ++itemIndex) {
+        avifEncoderItem * item = &encoder->data->items.item[itemIndex];
+        const int32_t itemIsImage = memcmp(item->type, "av01", 4) == 0;
+        if (itemIsImage) {
+            irefToPush(gridItem, item->id);
+        }
+    }
+    gridItem->irefType = "dimg";
+
+    // Update the primary item to the grid item id.
+    encoder->data->primaryItemID = gridItem->id;
+
+    return AVIF_RESULT_OK;
+}
 
 avifResult avifEncoderAddImage(avifEncoder * encoder, const avifImage * image, uint64_t durationInTimescales, uint32_t addImageFlags)
 {
@@ -877,6 +929,7 @@ avifResult avifEncoderFinish(avifEncoder * encoder, avifRWData * output)
     for (uint32_t itemIndex = 0; itemIndex < encoder->data->items.count; ++itemIndex) {
         avifEncoderItem * item = &encoder->data->items.item[itemIndex];
         const int32_t itemIsGrid = memcmp(item->type, "grid", 4) == 0;
+        const int32_t isOverlay = memcmp(item->type, "iovl", 4) == 0;
 
         uint32_t contentSize = (uint32_t)item->metadataPayload.size;
         if (item->encodeOutput->samples.count > 0) {
@@ -894,7 +947,7 @@ avifResult avifEncoderFinish(avifEncoder * encoder, avifRWData * output)
         avifRWStreamWriteU16(&s, item->id);              // unsigned int(16) item_ID;
         if ((version == 1) || (version == 2)) {
             uint16_t construction_method = 0;            // unsigned int(12) reserved = 0, unsigned int(4) construction_method;
-            if (itemIsGrid) {
+            if (itemIsGrid || isOverlay) {
                 construction_method = 1;
             }
             avifRWStreamWriteU16(&s, construction_method);
@@ -910,8 +963,17 @@ avifResult avifEncoderFinish(avifEncoder * encoder, avifRWData * output)
             if (gridWidth >= 65536 || gridHeight >= 65536) {
                 fieldLength = 32;
             }
-            contentSize = 4 + 2 * (fieldLength / 8);
-            avifRWStreamWriteU32(&s, (uint32_t)contentSize); // unsigned int(length_size*8) extent_length;
+            contentSize = 4; // unsigned int(8) version, flags, rows_minus_one, cols_minus_one
+            contentSize += 2 * (fieldLength / 8);
+        } else if (isOverlay) {
+            uint32_t fieldLength = 16;
+            if (encoder->data->overlayWidth >= 65536 || encoder->data->overlayHeight >= 65536) {
+                fieldLength = 32;
+            }
+            contentSize = 2; // unsigned int(8) version, flags
+            contentSize += 4 * 2; // 4x unsigned int(16) overlay_color
+            contentSize += 2 * (fieldLength / 8); // unsigned int(FieldLength) output_width, output_height
+            contentSize += 2 * encoder->data->overlayOffsetCount * (fieldLength / 8); // signed int(FieldLength) horizontal_offset, vertical_offset
         }
 
         avifRWStreamWriteU32(&s, (uint32_t)contentSize); // unsigned int(length_size*8) extent_length;
@@ -990,6 +1052,7 @@ avifResult avifEncoderFinish(avifEncoder * encoder, avifRWData * output)
 
         //const int32_t itemIsImage = memcmp(item->type, "av01", 4) == 0;
         const int32_t itemIsGrid = memcmp(item->type, "grid", 4) == 0;
+        const int32_t isOverlay = memcmp(item->type, "iovl", 4) == 0;
 
         if (itemIsGrid) {
             uint32_t gridWidth = imageMetadata->width * encoder->data->gridCols;
@@ -998,6 +1061,14 @@ avifResult avifEncoderFinish(avifEncoder * encoder, avifRWData * output)
             avifBoxMarker ispe = avifRWStreamWriteFullBox(&s, "ispe", AVIF_BOX_SIZE_TBD, 0, 0);
             avifRWStreamWriteU32(&s, gridWidth);  // unsigned int(32) image_width;
             avifRWStreamWriteU32(&s, gridHeight); // unsigned int(32) image_height;
+            avifRWStreamFinishBox(&s, ispe);
+            ipmaPush(&item->ipma, ++itemPropertyIndex, AVIF_FALSE); // ipma is 1-indexed, doing this afterwards is correct
+            continue;
+        }
+        if (isOverlay) {
+            avifBoxMarker ispe = avifRWStreamWriteFullBox(&s, "ispe", AVIF_BOX_SIZE_TBD, 0, 0);
+            avifRWStreamWriteU32(&s, encoder->data->overlayWidth);  // unsigned int(32) image_width;
+            avifRWStreamWriteU32(&s, encoder->data->overlayHeight); // unsigned int(32) image_height;
             avifRWStreamFinishBox(&s, ispe);
             ipmaPush(&item->ipma, ++itemPropertyIndex, AVIF_FALSE); // ipma is 1-indexed, doing this afterwards is correct
             continue;
@@ -1088,10 +1159,11 @@ avifResult avifEncoderFinish(avifEncoder * encoder, avifRWData * output)
 
     // -----------------------------------------------------------------------
     // Write idat
-    // Currentky only supports grid.
+    // Currently only supports grid and overlay.
     for (uint32_t itemIndex = 0; itemIndex < encoder->data->items.count; ++itemIndex) {
         avifEncoderItem * item = &encoder->data->items.item[itemIndex];
         const int32_t itemIsGrid = memcmp(item->type, "grid", 4) == 0;
+        const int32_t isOverlay = memcmp(item->type, "iovl", 4) == 0;
 
         if (itemIsGrid) {
             //avifBoxMarker idat = avifRWStreamWriteFullBox(&s, "idat", AVIF_BOX_SIZE_TBD, 0, 0);
@@ -1123,6 +1195,47 @@ avifResult avifEncoderFinish(avifEncoder * encoder, avifRWData * output)
             }
 
              avifRWStreamFinishBox(&s, idat);
+
+             // Only the first grid is supported.
+             break;
+        } else if (isOverlay) {
+            avifBoxMarker idat = avifRWStreamWriteBox(&s, "idat", AVIF_BOX_SIZE_TBD);
+
+            uint32_t fieldLength = 16;
+            if (encoder->data->overlayWidth >= 65536 || encoder->data->overlayHeight >= 65536) {
+                fieldLength = 32;
+            }
+
+            avifRWStreamWriteU8(&s, 0);                     // unsigned int(8) version = 0;
+            if (fieldLength == 16) {
+                avifRWStreamWriteU8(&s, 0);                     // unsigned int(8) flags;
+            } else {
+                avifRWStreamWriteU8(&s, 1);                     // unsigned int(8) flags;
+            }
+
+            for (int overlayColorIndex = 0; overlayColorIndex < 4; ++overlayColorIndex) {
+                avifRWStreamWriteU16(&s, encoder->data->overlayColorValues[overlayColorIndex]); // unsigned int(16) overlay_color;
+            }
+
+            if (fieldLength == 16) {
+                avifRWStreamWriteU16(&s, encoder->data->overlayWidth);        // unsigned int(FieldLength) output_width;
+                avifRWStreamWriteU16(&s, encoder->data->overlayHeight);       // unsigned int(FieldLength) output_height;
+            } else {
+                avifRWStreamWriteU32(&s, encoder->data->overlayWidth);        // unsigned int(FieldLength) output_width;
+                avifRWStreamWriteU32(&s, encoder->data->overlayHeight);       // unsigned int(FieldLength) output_height;
+            }
+
+            for (int overlayOffsetIndex = 0; overlayOffsetIndex < encoder->data->overlayOffsetCount; ++overlayOffsetIndex) {
+                if (fieldLength == 16) {
+                    avifRWStreamWriteU16(&s, encoder->data->overlayOffsetHorizontalArray[overlayOffsetIndex]); // unsigned int(FieldLength) horizontal_offset;
+                    avifRWStreamWriteU16(&s, encoder->data->overlayOffsetVerticalArray[overlayOffsetIndex]);   // unsigned int(FieldLength) vertical_offset;
+                } else {
+                    avifRWStreamWriteU32(&s, encoder->data->overlayOffsetHorizontalArray[overlayOffsetIndex]); // unsigned int(FieldLength) horizontal_offset;
+                    avifRWStreamWriteU32(&s, encoder->data->overlayOffsetVerticalArray[overlayOffsetIndex]);   // unsigned int(FieldLength) vertical_offset;
+                }
+            }
+
+            avifRWStreamFinishBox(&s, idat);
 
              // Only the first grid is supported.
              break;

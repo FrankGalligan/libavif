@@ -97,6 +97,10 @@ static void syntax(void)
     printf("    --imir AXIS                       : Add imir property (mirroring). 0=vertical, 1=horizontal\n");
     printf("    -gr,--gridrows r                  : Set number of rows for grid encoding (default: 0)\n");
     printf("    -gc,--gridcols c                  : Set number of cols for grid encoding (default: 0)\n");
+    printf("    -oc,--overlay-color R,G,B,A       : Overlay fill color as 16 bit RGBA values. (default: 65535)\n");
+    printf("    -ow,--overlay-width w             : Overlay width.\n");
+    printf("    -oh,--overlay-height h            : Overlay height.\n");
+    printf("    -oo,--overlay-offset x,y          : Overlay offset for the to refer item in sequence. (default: 0)\n");
     printf("\n");
     if (avifCodecName(AVIF_CODEC_CHOICE_AOM, 0)) {
         printf("aom-specific advanced options:\n");
@@ -109,7 +113,9 @@ static void syntax(void)
         printf("\n");
     }
     printf("Example: 2x2 Grid encoding (four input images)\n");
-    printf("  avifenc in1.png in2.png in3.png in4.png -gr 2 -gc 2 -o .out.avif\n");
+    printf("  avifenc in1.png in2.png in3.png in4.png -gr 2 -gc 2 -o out.avif\n");
+    printf("Example: 4 image overaly encoding\n");
+    printf("  avifenc in1.png in2.png in3.png in4.png -oc 0,0,0,65535 -ow 300 -oh 400 -oo 0,0 -oo 60,80 -oo 120,160 -oo 180,240 -o out.avif\n");
     avifPrintVersions();
 }
 
@@ -174,6 +180,37 @@ static int parseU32List(uint32_t output[8], const char * arg)
         token = strtok(NULL, ",");
     }
     return index;
+}
+
+// Returns the count of int32_t (up to 8)
+static int parseS32List(int32_t output[8], const char * arg)
+{
+    char buffer[128];
+    strncpy(buffer, arg, 127);
+    buffer[127] = 0;
+
+    int index = 0;
+    char * token = strtok(buffer, ",");
+    while (token != NULL) {
+        output[index] = atoi(token);
+        ++index;
+        if (index >= 8) {
+            break;
+        }
+
+        token = strtok(NULL, ",");
+    }
+    return index;
+}
+
+static void addElementToInt32Array(int32_t ** array, int * size, int32_t element) {
+  int32_t * newArray = avifAlloc(sizeof(int32_t) * ((*size) + 1));
+  memcpy(newArray, *array, sizeof(int32_t) * (*size));
+  newArray[*size] = element;
+  (*size)++;
+
+  avifFree(*array);
+  *array = newArray;
 }
 
 static avifInputFile * avifInputGetNextFile(avifInput * input)
@@ -315,6 +352,14 @@ int main(int argc, char * argv[])
 
     int gridRows = 0;
     int gridCols = 0;
+    uint32_t overlayColorValues[4];
+    uint32_t overlayWidth = 0;
+    uint32_t overlayHeight = 0;
+    int32_t * overlayOffsetHorizontalArray = NULL;
+    int32_t * overlayOffsetVerticalArray = NULL;
+    int overlayOffsetHorizontalCount = 0;
+    int overlayOffsetVerticalCount = 0;
+
 
     avifImage * additionalAvifImagesArray = NULL;
 
@@ -325,6 +370,9 @@ int main(int argc, char * argv[])
     avifColorPrimaries colorPrimaries = AVIF_COLOR_PRIMARIES_UNSPECIFIED;
     avifTransferCharacteristics transferCharacteristics = AVIF_TRANSFER_CHARACTERISTICS_UNSPECIFIED;
     avifMatrixCoefficients matrixCoefficients = AVIF_MATRIX_COEFFICIENTS_BT601;
+
+    // Set default overlay fill color to opaque white.
+    memset(overlayColorValues, 0xffff, sizeof(uint32_t) * 4);
 
     int argIndex = 1;
     while (argIndex < argc) {
@@ -353,6 +401,31 @@ int main(int argc, char * argv[])
         } else if (!strcmp(arg, "-gc") || !strcmp(arg, "--gridcols")) {
             NEXTARG();
             gridCols = atoi(arg);
+        } else if (!strcmp(arg, "-oc") || !strcmp(arg, "--overlay-color")) {
+            NEXTARG();
+            const int argCount = parseU32List(overlayColorValues, arg);
+            if (argCount != 4) {
+                fprintf(stderr, "ERROR: Invalid overlay color values: %s\n", arg);
+                returnCode = 1;
+                goto cleanup;
+            }
+        } else if (!strcmp(arg, "-ow") || !strcmp(arg, "--overlay-width")) {
+            NEXTARG();
+            overlayWidth = atoi(arg);
+        } else if (!strcmp(arg, "-oh") || !strcmp(arg, "--overlay-height")) {
+            NEXTARG();
+            overlayHeight = atoi(arg);
+        } else if (!strcmp(arg, "-oo") || !strcmp(arg, "--overlay-offset")) {
+            int32_t values[2];
+            NEXTARG();
+            const int argCount = parseS32List(values, arg);
+            if (argCount != 2) {
+                fprintf(stderr, "ERROR: Invalid overlay offset values: %s\n", arg);
+                returnCode = 1;
+                goto cleanup;
+            }
+            addElementToInt32Array(&overlayOffsetHorizontalArray, &overlayOffsetHorizontalCount, values[0]);
+            addElementToInt32Array(&overlayOffsetVerticalArray, &overlayOffsetVerticalCount, values[1]);
         } else if (!strcmp(arg, "-d") || !strcmp(arg, "--depth")) {
             NEXTARG();
             input.requestedDepth = atoi(arg);
@@ -802,14 +875,15 @@ int main(int argc, char * argv[])
         printf(" * Encoding frame 1 [%u/%d ts]: %s\n", firstDurationInTimescales, timescale, firstFile->filename);
     }
     
-    if (gridRows > 0 && gridCols > 0) {
+    if ((gridRows > 0 && gridCols > 0) ||
+        (overlayWidth > 0 && overlayHeight > 0 && overlayOffsetHorizontalCount == overlayOffsetVerticalCount)) {
         if (input.useStdin) {
             fprintf(stderr, "ERROR: Derived images do not support stdin.\n");
             goto cleanup;
         }
         additionalAvifImagesArray = avifAlloc(sizeof(avifImage) * input.filesCount);
 
-        // Grid encoding is currently only for single images.
+        // Derived encoding is currently only for single images.
         addImageFlags |= AVIF_ADD_IMAGE_FLAG_SINGLE;
 
         avifResult addImageResult = avifEncoderAddImageToItem(encoder, image, firstDurationInTimescales, addImageFlags);
@@ -847,10 +921,18 @@ int main(int argc, char * argv[])
             goto cleanup;
         }
 
-        addImageResult = avifEncoderAddImageGrid(encoder, gridRows, gridCols);
-        if (addImageResult != AVIF_RESULT_OK) {
-            fprintf(stderr, "ERROR: Failed to add grid: %s\n", avifResultToString(addImageResult));
-            goto cleanup;
+        if (gridRows > 0 && gridCols > 0) {
+            addImageResult = avifEncoderAddImageGrid(encoder, gridRows, gridCols);
+            if (addImageResult != AVIF_RESULT_OK) {
+                fprintf(stderr, "ERROR: Failed to add grid: %s\n", avifResultToString(addImageResult));
+                goto cleanup;
+            }
+        } else {
+            addImageResult = avifEncoderAddImageOverlay(encoder, overlayWidth, overlayHeight, overlayColorValues, overlayOffsetHorizontalArray, overlayOffsetVerticalArray, overlayOffsetHorizontalCount, overlayOffsetVerticalCount);
+            if (addImageResult != AVIF_RESULT_OK) {
+                fprintf(stderr, "ERROR: Failed to add overlay: %s\n", avifResultToString(addImageResult));
+                goto cleanup;
+            }
         }
     } else {
         avifResult addImageResult = avifEncoderAddImage(encoder, image, firstDurationInTimescales, addImageFlags);
