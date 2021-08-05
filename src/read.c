@@ -7,6 +7,9 @@
 #include <inttypes.h>
 #include <limits.h>
 #include <string.h>
+#include <stdio.h>
+#include <sys/time.h>
+#include <time.h>
 
 #define AUXTYPE_SIZE 64
 #define CONTENTTYPE_SIZE 64
@@ -3604,10 +3607,17 @@ avifResult avifDecoderNextImage(avifDecoder * decoder)
 
         const avifDecodeSample * sample = &tile->input->samples.sample[nextImageIndex];
 
+        struct timespec start, end;
+        clock_gettime(CLOCK_MONOTONIC_RAW, &start);
+
         if (!tile->codec->getNextImage(tile->codec, decoder, sample, tile->input->alpha, tile->image)) {
             avifDiagnosticsPrintf(&decoder->diag, "tile->codec->getNextImage() failed");
             return tile->input->alpha ? AVIF_RESULT_DECODE_ALPHA_FAILED : AVIF_RESULT_DECODE_COLOR_FAILED;
         }
+
+        clock_gettime(CLOCK_MONOTONIC_RAW, &end);
+        uint64_t delta_us = (end.tv_sec - start.tv_sec) * 1000000 + (end.tv_nsec - start.tv_nsec) / 1000;
+        printf("decode-getNextImage-%g-milli\n", delta_us / 1000.0);
 
         // Scale the decoded image so that it corresponds to this tile's output dimensions
         if ((tile->width != tile->image->width) || (tile->height != tile->image->height)) {

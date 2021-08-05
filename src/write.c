@@ -6,6 +6,7 @@
 #include <assert.h>
 #include <string.h>
 #include <time.h>
+#include <stdio.h>
 
 #define MAX_ASSOCIATIONS 16
 struct ipmaArray
@@ -635,8 +636,17 @@ static avifResult avifEncoderAddImageInternal(avifEncoder * encoder,
         avifEncoderItem * item = &encoder->data->items.item[itemIndex];
         if (item->codec) {
             const avifImage * cellImage = cellImages[item->cellIndex];
+
+            struct timespec start, end;
+            clock_gettime(CLOCK_MONOTONIC_RAW, &start);
+
             avifResult encodeResult =
                 item->codec->encodeImage(item->codec, encoder, cellImage, item->alpha, addImageFlags, item->encodeOutput);
+
+            clock_gettime(CLOCK_MONOTONIC_RAW, &end);
+            uint64_t delta_us = (end.tv_sec - start.tv_sec) * 1000000 + (end.tv_nsec - start.tv_nsec) / 1000;
+            printf("encode-encodeImage-%g-milli\n", delta_us / 1000.0);
+
             if (encodeResult == AVIF_RESULT_UNKNOWN_ERROR) {
                 encodeResult = item->alpha ? AVIF_RESULT_ENCODE_ALPHA_FAILED : AVIF_RESULT_ENCODE_COLOR_FAILED;
             }
