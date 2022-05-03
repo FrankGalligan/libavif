@@ -7,6 +7,9 @@
 #include <inttypes.h>
 #include <limits.h>
 #include <string.h>
+#include <stdio.h>
+#include <sys/time.h>
+#include <time.h>
 
 #define AUXTYPE_SIZE 64
 #define CONTENTTYPE_SIZE 64
@@ -3782,11 +3785,18 @@ static avifResult avifDecoderDecodeTiles(avifDecoder * decoder,
             return AVIF_RESULT_OK;
         }
 
+        struct timespec start, end;
+        clock_gettime(CLOCK_MONOTONIC_RAW, &start);
+
         avifBool isLimitedRangeAlpha = AVIF_FALSE;
         if (!tile->codec->getNextImage(tile->codec, decoder, sample, tile->input->alpha, &isLimitedRangeAlpha, tile->image)) {
             avifDiagnosticsPrintf(&decoder->diag, "tile->codec->getNextImage() failed");
             return tile->input->alpha ? AVIF_RESULT_DECODE_ALPHA_FAILED : AVIF_RESULT_DECODE_COLOR_FAILED;
         }
+
+        clock_gettime(CLOCK_MONOTONIC_RAW, &end);
+        uint64_t delta_us = (end.tv_sec - start.tv_sec) * 1000000 + (end.tv_nsec - start.tv_nsec) / 1000;
+        printf("decode-getNextImage-%g-milli\n", delta_us / 1000.0);
 
         // Alpha plane with limited range is not allowed by the latest revision
         // of the specification. However, it was allowed in version 1.0.0 of the
