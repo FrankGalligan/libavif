@@ -16,6 +16,10 @@
 
 #include "iccjpeg.h"
 
+#include <sys/time.h>
+#include <time.h>
+
+
 #define AVIF_MIN(a, b) (((a) < (b)) ? (a) : (b))
 #define AVIF_MAX(a, b) (((a) > (b)) ? (a) : (b))
 
@@ -375,10 +379,17 @@ avifBool avifJPEGRead(const char * inputFilename,
             memcpy(pixelRow, buffer[0], rgb.rowBytes);
             ++row;
         }
+
+        struct timespec start, end;
+        clock_gettime(CLOCK_MONOTONIC_RAW, &start);
+
         if (avifImageRGBToYUV(avif, &rgb) != AVIF_RESULT_OK) {
             fprintf(stderr, "Conversion to YUV failed: %s\n", inputFilename);
             goto cleanup;
         }
+        clock_gettime(CLOCK_MONOTONIC_RAW, &end);
+        uint64_t delta_us = (end.tv_sec - start.tv_sec) * 1000000 + (end.tv_nsec - start.tv_nsec) / 1000;
+        printf("decode-jpeg-avifImageRGBToYUV-%g-milli\n", delta_us / 1000.0);
     }
 
     if (!ignoreExif) {

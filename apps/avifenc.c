@@ -14,6 +14,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <time.h>
+#include <sys/time.h>
+
 #if defined(_WIN32)
 // for setmode()
 #include <fcntl.h>
@@ -1321,12 +1324,17 @@ int main(int argc, char * argv[])
                    outputTiming.timescale,
                    firstFile->filename);
         }
+        struct timespec start, end;
++       clock_gettime(CLOCK_MONOTONIC_RAW, &start);
         avifResult addImageResult = avifEncoderAddImage(encoder, image, firstDurationInTimescales, addImageFlags);
         if (addImageResult != AVIF_RESULT_OK) {
             fprintf(stderr, "ERROR: Failed to encode image: %s\n", avifResultToString(addImageResult));
             returnCode = 1;
             goto cleanup;
         }
+        clock_gettime(CLOCK_MONOTONIC_RAW, &end);
+        uint64_t delta_us = (end.tv_sec - start.tv_sec) * 1000000 + (end.tv_nsec - start.tv_nsec) / 1000;
+        printf("avifEncoderAddImage-%g-milli\n", delta_us / 1000.0);
 
         // Not generating a single-image grid: Use all remaining input files as subsequent frames.
 

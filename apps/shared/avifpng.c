@@ -14,6 +14,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <sys/time.h>
+#include <time.h>
+
 #if !defined(PNG_eXIf_SUPPORTED) || !defined(PNG_iTXt_SUPPORTED)
 #error "libpng 1.6.32 or above with PNG_eXIf_SUPPORTED and PNG_iTXt_SUPPORTED is required."
 #endif
@@ -345,10 +348,18 @@ avifBool avifPNGRead(const char * inputFilename,
         rowPointers[y] = &rgb.pixels[y * rgb.rowBytes];
     }
     png_read_image(png, rowPointers);
+
+    struct timespec start, end;
+    clock_gettime(CLOCK_MONOTONIC_RAW, &start);
+
     if (avifImageRGBToYUV(avif, &rgb) != AVIF_RESULT_OK) {
         fprintf(stderr, "Conversion to YUV failed: %s\n", inputFilename);
         goto cleanup;
     }
+
+    clock_gettime(CLOCK_MONOTONIC_RAW, &end);
+    uint64_t delta_us = (end.tv_sec - start.tv_sec) * 1000000 + (end.tv_nsec - start.tv_nsec) / 1000;
+    printf("decode-png-avifImageRGBToYUV-%g-milli\n", delta_us / 1000.0);
 
     // Read Exif metadata at the beginning of the file.
     if (!avifExtractExifAndXMP(png, info, &ignoreExif, &ignoreXMP, avif)) {
@@ -417,10 +428,18 @@ avifBool avifPNGWrite(const char * outputFilename, const avifImage * avif, uint3
             rgb.format = AVIF_RGB_FORMAT_RGB;
         }
         avifRGBImageAllocatePixels(&rgb);
+
+        struct timespec start, end;
+        clock_gettime(CLOCK_MONOTONIC_RAW, &start);
+
         if (avifImageYUVToRGB(avif, &rgb) != AVIF_RESULT_OK) {
             fprintf(stderr, "Conversion to RGB failed: %s\n", outputFilename);
             goto cleanup;
         }
+
+        clock_gettime(CLOCK_MONOTONIC_RAW, &end);
+        uint64_t delta_us = (end.tv_sec - start.tv_sec) * 1000000 + (end.tv_nsec - start.tv_nsec) / 1000;
+        printf("decode-png-avifImageYUVToRGB-%g-milli\n", delta_us / 1000.0);
     }
 
     f = fopen(outputFilename, "wb");
