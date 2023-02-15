@@ -1328,6 +1328,17 @@ int main(int argc, char * argv[])
             goto cleanup;
         }
 
+        if (encoder->diag.avifEncodeCount > 0) {
+            float avgEncodeMilliPerFrame = (encoder->diag.sumAvifEncodeSeconds * 1000.0) / encoder->diag.avifEncodeCount;
+            float megapixelsPerSecEncode = (encoder->diag.sumPixles / 1000000.0) / encoder->diag.sumAvifEncodeSeconds;
+            printf("Frames encoded: %d avg: %g milliseconds MP/s: %g\n", encoder->diag.avifEncodeCount, avgEncodeMilliPerFrame, megapixelsPerSecEncode);
+        }
+        if (encoder->diag.avifAlphaEncodeCount > 0) {
+            float avgEncodeMilliPerFrame = (encoder->diag.sumAlphaAvifEncodeSeconds * 1000.0) / encoder->diag.avifAlphaEncodeCount;
+            float megapixelsPerSecEncode = (encoder->diag.sumAlphaPixles / 1000000.0) / encoder->diag.sumAlphaAvifEncodeSeconds;
+            printf("Alpha Frames encoded: %d avg: %g milliseconds MP/s: %g\n", encoder->diag.avifAlphaEncodeCount, avgEncodeMilliPerFrame, megapixelsPerSecEncode);
+        }
+
         // Not generating a single-image grid: Use all remaining input files as subsequent frames.
 
         avifInputFile * nextFile;
