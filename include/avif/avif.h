@@ -343,6 +343,13 @@ typedef struct avifDiagnostics
     // error that only occurs during strict decoding. If you disable strict mode, you will no
     // longer encounter this error.
     char error[AVIF_DIAGNOSTICS_ERROR_BUFFER_SIZE];
+
+    int avifEncodeCount;
+    double sumAvifEncodeSeconds;
+    uint64_t sumPixles;
+    int avifAlphaEncodeCount;
+    double sumAlphaAvifEncodeSeconds;
+    uint64_t sumAlphaPixles;
 } avifDiagnostics;
 
 AVIF_API void avifDiagnosticsClearError(avifDiagnostics * diag);

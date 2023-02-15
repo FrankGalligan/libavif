@@ -21,6 +21,62 @@ static void ipmaPush(struct ipmaArray * ipma, uint8_t assoc, avifBool essential)
     ++ipma->count;
 }
 
+// Note: Code copied from libwebp for illustrative purposes. Once direction is decided the code would be added to libavif properly.
+#ifndef _MSC_VER
+#if defined(__cplusplus) || !defined(__STRICT_ANSI__) || \
+    (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 199901L)
+#define WEBP_INLINE inline
+#else
+#define WEBP_INLINE
+#endif
+#else
+#define WEBP_INLINE __forceinline
+#endif  /* _MSC_VER */
+
+
+#if defined _WIN32 && !defined __GNUC__
+#include <windows.h>
+
+typedef LARGE_INTEGER Stopwatch;
+
+static WEBP_INLINE void StopwatchReset(Stopwatch* watch) {
+  QueryPerformanceCounter(watch);//
+}
+
+static WEBP_INLINE double StopwatchReadAndReset(Stopwatch* watch) {
+  const LARGE_INTEGER old_value = *watch;
+  LARGE_INTEGER freq;
+  if (!QueryPerformanceCounter(watch))
+    return 0.0;
+  if (!QueryPerformanceFrequency(&freq))
+    return 0.0;
+  if (freq.QuadPart == 0)
+    return 0.0;
+  return (watch->QuadPart - old_value.QuadPart) / (double)freq.QuadPart;
+}
+
+
+#else    /* !_WIN32 */
+#include <sys/time.h>
+
+typedef struct timeval Stopwatch;
+
+static WEBP_INLINE void StopwatchReset(Stopwatch* watch) {
+  gettimeofday(watch, NULL);
+}
+
+static WEBP_INLINE double StopwatchReadAndReset(Stopwatch* watch) {
+  struct timeval old_value;
+  double delta_sec, delta_usec;
+  memcpy(&old_value, watch, sizeof(old_value));
+  gettimeofday(watch, NULL);
+  delta_sec = (double)watch->tv_sec - old_value.tv_sec;
+  delta_usec = (double)watch->tv_usec - old_value.tv_usec;
+  return delta_sec + delta_usec / 1000000.0;
+}
+
+#endif   /* _WIN32 */
+
 // Used to store offsets in meta boxes which need to point at mdat offsets that
 // aren't known yet. When an item's mdat payload is written, all registered fixups
 // will have this now-known offset "fixed up".
@@ -1215,6 +1271,8 @@ static avifResult avifEncoderAddImageInternal(avifEncoder * encoder,
                 cellImage = paddedCellImage;
             }
             const int quantizer = item->alpha ? encoder->data->quantizerAlpha : encoder->data->quantizer;
+            Stopwatch watch;
+            StopwatchReset(&watch);
             avifResult encodeResult = item->codec->encodeImage(item->codec,
                                                                encoder,
                                                                cellImage,
@@ -1225,6 +1283,7 @@ static avifResult avifEncoderAddImageInternal(avifEncoder * encoder,
                                                                encoderChanges,
                                                                addImageFlags,
                                                                item->encodeOutput);
+            double deltaSec = StopwatchReadAndReset(&watch);
             if (paddedCellImage) {
                 avifImageDestroy(paddedCellImage);
             }
@@ -1233,6 +1292,15 @@ static avifResult avifEncoderAddImageInternal(avifEncoder * encoder,
             }
             if (encodeResult != AVIF_RESULT_OK) {
                 return encodeResult;
+            }
+            if (item->alpha) {
+                encoder->diag.sumAlphaAvifEncodeSeconds += deltaSec;
+                encoder->diag.sumAlphaPixles += cellImage->width * cellImage->height;
+                encoder->diag.avifAlphaEncodeCount++;
+            } else {
+                encoder->diag.sumAvifEncodeSeconds += deltaSec;
+                encoder->diag.sumPixles += cellImage->width * cellImage->height;
+                encoder->diag.avifEncodeCount++;
             }
         }
     }
