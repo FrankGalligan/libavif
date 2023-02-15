@@ -7,6 +7,8 @@
 #include <string.h>
 #include <time.h>
 
+#include <stdio.h>
+
 #define MAX_ASSOCIATIONS 16
 struct ipmaArray
 {
@@ -1215,6 +1217,10 @@ static avifResult avifEncoderAddImageInternal(avifEncoder * encoder,
                 cellImage = paddedCellImage;
             }
             const int quantizer = item->alpha ? encoder->data->quantizerAlpha : encoder->data->quantizer;
+
+            struct timespec start, end;
+            clock_gettime(CLOCK_MONOTONIC_RAW, &start);
+
             avifResult encodeResult = item->codec->encodeImage(item->codec,
                                                                encoder,
                                                                cellImage,
@@ -1225,6 +1231,11 @@ static avifResult avifEncoderAddImageInternal(avifEncoder * encoder,
                                                                encoderChanges,
                                                                addImageFlags,
                                                                item->encodeOutput);
+
+            clock_gettime(CLOCK_MONOTONIC_RAW, &end);
+            uint64_t delta_us = (end.tv_sec - start.tv_sec) * 1000000 + (end.tv_nsec - start.tv_nsec) / 1000;
+            printf("encode-encodeImage-%g-milli\n", delta_us / 1000.0);
+
             if (paddedCellImage) {
                 avifImageDestroy(paddedCellImage);
             }
